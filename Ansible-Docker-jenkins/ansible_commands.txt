@@ -1,0 +1,229 @@
+ansible -i inventory_name -m ping all        (pings all the server under inventory_name )
+
+--------to copy a file from ansible master to worker node------------------------
+ansible -i inventory_name -m copy -a "src=path_of_the_file  dest=path_where_you want_to_copy" servername
+
+eg..  ansible -i my_Inventory -m copy -a "src=./sample.txt dest=/home/ec2-user/ansible_files" all  -----> will copy file to all the server in my_Inventory 
+
+---------to copy the content of file into a new file-----------------------------------
+
+eg.. ansible -i my_Inventory -m copy -a "src=./sample.txt dest=/home/ec2-user/ansible_files/sample1.txt" all (This will create a new sample1.txt and only cpoy the content into sample1.txt)
+
+
+------copy the content into a file-----
+
+eg..ansible -i my_Inventory -m copy -a "content='Hello from master' dest=/home/ec2-user/ansible_files/sample1.txt" all
+(If file is not present it will create a sample1.txt and paste the content='Hello from master)
+
+---to fetch the file from worker to ansible engine--------
+
+e.g ansible -i my_Inventory -m fetch -a "src=/home/ec2-user/ansible_files/dest_file  dest=./ flat=yes" all
+(flat=yes helps to copy only the file i.e dest_file if we do not mention this then whole directory(/home/ec2-user/ansible_files/dest_file) will be copied into ansible master node )
+here src is the address of worker node and dest where we have to copy the file i.e master node
+
+------to create a file on the worker node------------
+
+e.g ansible -i my_Inventory -m file -a "path=/home/ec2-user/ansible_files/myfile.log state=touch" all
+(file module is used to create a file on destination path="where we want to create the file" and state is "touch")
+
+-----------to delete file from the path in worker node-------
+
+e.g ansible -i my_Inventory -m file -a "path=/home/ec2-user/ansible_files/myfile.log state=absent" all
+(Wehave to just change the state to absent & if we want to create a directory state =directory)
+
+-------to install any package on worker machines--------
+
+eg ..  ansible -i my_Inventory -m yum -a "name=git state=present" -b --become-user=root all
+eg..  ansible -i my_Inventory -m yum -a "name=tree state=present" -b --become-user=root all
+(-b --become-user=root allows ansible to run adhoc command with root priviliges and since we need to install a package we have to run the command with root )
+
+
+------to gather ansible facts of worker nodes --------
+
+ansible -i my_Inventory -m setup all
+(ansible facts are information about the worker nodes eg . os distributions of worker nodes,release, processor etc )
+
+--------------simple playbook to print a message------------
+
+- hosts: worker
+  tasks:
+  - debug: msg="Welcome"
+
+-------------playbook to pass values in variables------------------
+
+- hosts: localhost
+  vars:
+    a: 25
+    name: "Vivek"
+  tasks:
+  - debug:
+      msg:
+      - "My age is :{{a}}"
+      - "My name is :{{name}}"
+
+
+-----------------playbook to take input from user-------------------
+
+- hosts: worker
+  vars:
+    x: 25
+    name: "vivek"
+  vars_prompt:                ------>(vars_prompt is used to take input from user where y will store the value and promt will)
+      name: y
+      prompt: How are you
+      private: no            -------->(private no will display the value we enter by default it is yes so that the vaue entered is hidden)
+  tasks:
+  - debug:
+     msg:
+      - "{{name}} is doing {{y}}"
+
+run the playbook
+
+How are you:____    (the value entered will be stored in y)
+
+---------command line argumnets passing value while running a playbook----------
+
+
+- hosts: localhost
+  tasks:
+  - debug:
+     msg:
+      - "The value of x: {{x}}"
+
+  ansible-playbook -i my_Inventory command_line_argument.yml -e "x=30" 
+
+
+-e is used to pass the argument
+
+---------------ansible playbook to copy file form source to destination--------------------------
+
+ - name: this playbook to copy files in /var/www/html
+   hosts: all
+   tasks:
+     - name: copying files
+       copy:
+         src: "~/workspace/A_CICD_PROJECT/index.html"   ---------->Path of the file we want to copy
+         dest: "/var/www/html/"				---------->Path of the file where we want to copy it
+
+ansible-playbook -i inventory_file playbook_file   ---------->to execute a the playbook
+
+------------Dockerfile to create httpd server image and copy a file into it-----------
+
+FROM httpd:2.4
+COPY ./index.html /usr/local/apache2/htdocs/  				<---------index.html should be present where dockerfile is copied
+
+
+--------------ansible playbook to copy the dockerfile to the host machine---------------
+
+- hosts: worker
+  tasks:
+  -  name: Coping dockerfile
+     copy:
+       src: "/home/ubuntu/repo/Dockerfile"			<---------------- location of dockerfile in the ansible engine
+       dest: "/home/ec2-user/"					<---------------- location where we want to copy the Dockerfile
+
+(If you get the following error -(FAILED! => {"changed": false, "failed": true, "msg": "Error connecting: Error while fetching server API version: ('Connection aborted.', error(13, 'Permission denied'))"}
+then it is because our worker or node machines user does not have permission then we have to add user to docker group -sudo usermod -aG docker ec2-user
+
+--------------------ansible playbook to create image on host machines------------
+
+- hosts: worker
+  tasks:
+  - name: Creating image from dockerfile on host
+    docker_image:
+          path: /home/ec2-user/                           <-----------------it is the path of the dockerfile
+          name: my-app
+
+(If you get the following error -(FAILED! => {"changed": false, "failed": true, "msg": "Error connecting: Error while fetching server API version: ('Connection aborted.', error(13, 'Permission denied'))"}
+then it is because our worker or node machines user does not have permission then we have to add user to docker group -sudo usermod -aG docker ec2-user
+
+if you get interpreter error -- sudo apt-get install python3-docker
+
+------------ansible -playbook to create container from the image created on host machine-------------------
+
+- hosts: worker
+  tasks:
+  - name: creating container
+    docker_container:
+        name: My-container
+        image: my-app  					<------------------image that we created from above playbook
+        state: started
+        ports:
+          - "80:80"
+        tty: true
+        detach: true
+
+-------------simple pipeline using above playbook to create image and container after copying dockerfile--------
+
+pipeline{
+    agent any
+    stages{
+        stage('build'){
+            steps{
+                echo "Build stage"
+                sh '''
+                cd /home/ubuntu/
+                 ansible-playbook -i /home/ubuntu/Static_Inventory/my_Inventory copy.yml
+                
+                '''
+            }
+        }
+            
+            stage('Test'){
+                steps{
+                    echo "Testing stage"
+                    sh '''
+                    cd /home/ubuntu/
+                    ansible-playbook -i /home/ubuntu/Static_Inventory/my_Inventory image_creation.yml
+                    '''
+                }
+            }
+            stage('Deploy'){
+                steps{
+                    echo "Deploying container"
+                    sh'''
+                    cd /home/ubuntu/
+                    ansible-playbook -i /home/ubuntu/Static_Inventory/my_Inventory container.yml
+                    '''
+                }
+            }
+        }
+    }
+
+
+---------one ansible-playbook to copy fetch and execute script-----------
+
+
+- name: Gathering data of remote servers
+  hosts: worker
+  tasks:
+  - name: Copying the script
+    copy:
+      src: ./server-detail.sh
+      dest: ./
+  - name: Running the script
+    shell:					<---------- shell module to execute commnads on worker's shell
+       "sh server-detail.sh"
+  - name: Fetching the details of remote server
+    fetch:
+       src: "./server-details.excel"
+       dest: "./"
+       flat: yes
+
+------script used in above playbook-----------------
+
+#!/bin/bash
+server_name=$(uname -n)
+OS_type=$(uname)
+Up_time=$(uptime | awk 'NR==1{print $3}')
+ipaddress=$(ifconfig | awk 'NR==18{print $2}')
+
+echo "s.no,server_name,OS_type,Up_time,ipaddress" >server-details.excel
+echo "1,$(uname -n),$(uname),$(uptime | awk 'NR==1{print $3}'),$(ifconfig | awk 'NR==18{print $2}')" >>server-details.excel
+
+
+
+
+
+
+
